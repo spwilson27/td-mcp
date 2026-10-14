@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Web Paint</title>
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  cursor: crosshair;
+  user-select: none;
+}
+canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+</style>
+</head>
+<body>
+<canvas id="plate"></canvas>
+<canvas id="ink"></canvas>
+<script>
+(function () {
+  const plate = document.getElementById("plate");
+  const ink = document.getElementById("ink");
+  const plateCtx = plate.getContext("2d");
+  const inkCtx = ink.getContext("2d");
+  let drawing = false;
+  let last = null;
+  let socket = null;
+
+  function sizeToWindow() {
+    const width = Math.max(1, window.innerWidth);
+    const height = Math.max(1, window.innerHeight);
+    if (plate.width === width && plate.height === height && ink.width === width && ink.height === height) {
+      return;
+    }
+    const snapshot = document.createElement("canvas");
+    snapshot.width = ink.width;
+    snapshot.height = ink.height;
+    if (snapshot.width > 0 && snapshot.height > 0) {
+      snapshot.getContext("2d").drawImage(ink, 0, 0);
+    }
+    plate.width = width;
+    plate.height = height;
+    ink.width = width;
+    ink.height = height;
+    if (snapshot.width > 0 && snapshot.height > 0) {
+      inkCtx.drawImage(snapshot, 0, 0, width, height);
+    }
+  }
+
+  function paint(from, to) {
+    inkCtx.strokeStyle = "#ff2a2a";
+    inkCtx.lineWidth = 8;
+    inkCtx.lineCap = "round";
+    inkCtx.lineJoin = "round";
+    inkCtx.beginPath();
+    inkCtx.moveTo(from.x, from.y);
+    inkCtx.lineTo(to.x, to.y);
+    inkCtx.stroke();
+  }
+
+  function pointFrom(event) {
+    const rect = ink.getBoundingClientRect();
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
+    };
+  }
+
+  function drawPlate(image) {
+    sizeToWindow();
+    plateCtx.clearRect(0, 0, plate.width, plate.height);
+    plateCtx.drawImage(image, 0, 0, plate.width, plate.height);
+  }
+
+  function onPlate(event) {
+    const blob = new Blob([event.data], {type: "image/jpeg"});
+    if (typeof createImageBitmap === "function") {
+      createImageBitmap(blob).then(drawPlate).catch(function () {});
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = function () {
+      drawPlate(image);
+      URL.revokeObjectURL(url);
+    };
+    image.src = url;
+  }
+
+  function connect() {
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    const ws = new WebSocket("ws://" + location.host + "/");
+    socket = ws;
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = onPlate;
+    ws.onclose = function () {
+      if (socket === ws) {
+        socket = null;
+      }
+      setTimeout(connect, 400);
+    };
+  }
+
+  ink.addEventListener("mousedown", function (event) {
+    if (event.button !== 0) {
+      return;
+    }
+    sizeToWindow();
+    drawing = true;
+    last = pointFrom(event);
+    paint(last, last);
+    event.preventDefault();
+  });
+
+  window.addEventListener("mousemove", function (event) {
+    if (!drawing || !last) {
+      return;
+    }
+    const next = pointFrom(event);
+    paint(last, next);
+    last = next;
+  });
+
+  window.addEventListener("mouseup", function () {
+    drawing = false;
+    last = null;
+  });
+
+  window.addEventListener("resize", sizeToWindow);
+  sizeToWindow();
+  connect();
+})();
+</script>
+</body>
+</html>

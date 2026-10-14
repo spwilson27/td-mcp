@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "td-python-debug": {
+      "command": "/Users/mrwilson/software/td-mcp/.venv/bin/python",
+      "args": ["-m", "td_mcp"]
+    }
+  }
+}

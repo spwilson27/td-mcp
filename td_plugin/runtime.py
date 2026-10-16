@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -91,13 +92,27 @@ def get_hub() -> Hub:
     return _hub
 
 
+def _port_for(comp: Any) -> int:
+    """The `Port` parameter, unless TD_MCP_PORT (a valid port number) overrides it; an invalid value is logged and ignored."""
+    raw = os.environ.get("TD_MCP_PORT")
+    if raw:
+        try:
+            value = int(raw)
+            if 0 <= value <= 65535:
+                return value
+        except ValueError:
+            pass
+        print(f"td-python-debug: ignoring invalid TD_MCP_PORT={raw!r}; using the Port parameter")
+    return int(comp.par.Port.eval())
+
+
 def ensure_started(comp: Any, force: bool = False) -> None:
     hub = get_hub()
     if hub.running and not force:
         return
     module_path = str(comp.par.Modulepath.eval())
     _insert_module_path(module_path)
-    port = int(comp.par.Port.eval())
+    port = _port_for(comp)
     token = str(comp.par.Token.eval() or "")
     if token == "":
         import secrets

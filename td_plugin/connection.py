@@ -11,6 +11,9 @@ DEFAULT_PORT = 8765
 
 
 def connection_path() -> Path:
+    override = os.environ.get("TD_MCP_CONNECTION")
+    if override:
+        return Path(override).expanduser()
     return Path.home() / ".td-mcp" / "connection.json"
 
 

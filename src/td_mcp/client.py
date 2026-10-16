@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -12,6 +13,9 @@ LOOPBACK = {"127.0.0.1", "localhost"}
 
 
 def connection_path() -> Path:
+    override = os.environ.get("TD_MCP_CONNECTION")
+    if override:
+        return Path(override).expanduser()
     return Path.home() / ".td-mcp" / "connection.json"
 
 
@@ -30,7 +34,7 @@ def load_connection(path: Path | None = None) -> Connection:
     dest = path or connection_path()
     if not dest.is_file():
         raise ConnectionConfigError(
-            "No connection file at ~/.td-mcp/connection.json. "
+            f"No connection file at {dest}. "
             "Open TouchDesigner and run the installer from the Textport."
         )
     try:

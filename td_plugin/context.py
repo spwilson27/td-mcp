@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from td_plugin.handlers import debugpy_missing_message
 
-TD_PYTHON = (
-    "/Applications/TouchDesigner.app/Contents/Frameworks/"
-    "Python.framework/Versions/3.11/bin/python3.11"
-)
+FALLBACK_PYTHON = "python3"
 
 _debugpy_port: int | None = None
 
@@ -52,13 +51,7 @@ class TouchDesignerContext:
         }
 
     def python_executable(self) -> str:
-        try:
-            executable = getattr(_td().app, "pythonExecutable", None)
-        except Exception:
-            executable = None
-        if executable:
-            return str(executable)
-        return TD_PYTHON
+        return find_td_python(_app())
 
     def start_debugpy(self, port: int) -> dict:
         try:
@@ -94,3 +87,47 @@ class TouchDesignerContext:
 
 def _td():
     return importlib.import_module("td")
+
+
+def _app():
+    try:
+        return _td().app
+    except Exception:
+        return None
+
+
+def find_td_python(app: Any = None) -> str:
+    """TouchDesigner's own Python interpreter, found without assuming an install location.
+
+    Order: $TD_MCP_PYTHON, app.pythonExecutable, sys.executable (when it is a python binary), a python binary under sys.prefix /
+    app.binFolder / app.installFolder, else plain "python3".
+    """
+    override = os.environ.get("TD_MCP_PYTHON")
+    if override:
+        return override
+    explicit = getattr(app, "pythonExecutable", None) if app is not None else None
+    if explicit:
+        return str(explicit)
+    if Path(sys.executable or "").name.lower().startswith("python"):
+        return sys.executable
+    version = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    roots = [sys.prefix]
+    for attr in ("binFolder", "installFolder"):
+        value = getattr(app, attr, None) if app is not None else None
+        if value:
+            roots.append(str(value))
+    for root in roots:
+        base = Path(root)
+        for rel in (
+            f"bin/python{version}",
+            "bin/python3",
+            "python.exe",
+            "Scripts/python.exe",
+            f"Frameworks/Python.framework/Versions/{version}/bin/python{version}",
+            f"../Frameworks/Python.framework/Versions/{version}/bin/python{version}",
+            "bin/python.exe",
+        ):
+            candidate = base / rel
+            if candidate.is_file():
+                return str(candidate.resolve())
+    return FALLBACK_PYTHON

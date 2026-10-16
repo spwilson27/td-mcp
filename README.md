@@ -11,29 +11,39 @@ python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 ```
 
-Cursor loads the server from `.cursor/mcp.json` when this folder is the workspace.
+Cursor loads the server from `.cursor/mcp.json` when this folder is the workspace (it uses `${workspaceFolder}/.venv/bin/python`; on Windows use `.venv\\Scripts\\python.exe`).
 
-## Install into the TouchDesigner startup project
+## Install into a TouchDesigner project
 
-TouchDesigner is already set to open this file on launch:
+Preferred: drag `tox/td_python_debug.tox` into your project (any COMP, e.g. `/project1`) and save the project. The tox is self-contained: the `td_plugin` modules are embedded as DATs, so TouchDesigner needs no checkout of this repository. Token is blank and is generated at first start; Port is 8765 (override with the `TD_MCP_PORT` environment variable); Auto Start is on. The Textport reports `td-python-debug listening on 127.0.0.1:8765`.
 
-`/Users/mrwilson/Library/CloudStorage/Dropbox/vFX/TouchDesigner/Default.toe`
+Where `td_plugin` is loaded from (first match wins):
 
-1. Open TouchDesigner so it loads `Default.toe`.
-2. Open the Textport (Dialogs → Textport and DATs, or Alt+T) and run:
+1. the component's **Module Path** parameter, when not empty (development: live code from a checkout, applied the next TouchDesigner launch);
+2. the `TD_MCP_MODULEPATH` environment variable;
+3. the modules embedded in the component.
+
+### Development install (live code from this checkout)
+
+Open the Textport (Dialogs → Textport and DATs, or Alt+T) and run, with the real path:
 
 ```python
-exec(open("/Users/mrwilson/software/td-mcp/td_plugin/install.py").read(), globals())
+p = "<path-to-td-mcp>/td_plugin/install.py"; exec(compile(open(p).read(), p, "exec"), {**globals(), "__file__": p})
 ```
 
-3. Confirm the Textport reports `td-python-debug listening on 127.0.0.1:8765`.
-4. Save `Default.toe` (Cmd+S). Startup File Mode is already Custom File for that path, so leave Preferences unchanged.
-5. Quit TouchDesigner, open it again, and confirm the listen line appears without running the installer.
-6. Reload this Cursor window so `.cursor/mcp.json` connects. `td_status` should report the TouchDesigner Python version.
+(or set `TD_MCP_HOME=<path-to-td-mcp>` in the environment and run `exec(open("<path-to-td-mcp>/td_plugin/install.py").read(), globals())`). This creates `/project1/td_python_debug` with Module Path pointing at the checkout; save the project afterwards.
 
-The component is `/project1/td_python_debug`. Its Module Path parameter points at this repository, and Auto Start is on. Code changes in the repository apply the next time TouchDesigner launches. Re-run the installer if you want the saved callbacks themselves updated, then save `Default.toe` again.
+### Rebuilding the tox
 
-The plugin listens on `127.0.0.1` only and requires the token in `~/.td-mcp/connection.json`. `execute_python` runs arbitrary Python inside TouchDesigner.
+After changing `td_plugin/*.py` or the callbacks in `td_plugin/install.py`, regenerate it:
+
+```bash
+.venv/bin/python scripts/build_tox.py
+```
+
+This launches its own scratch TouchDesigner (never touching an open project; `TD_BIN` selects the executable, otherwise the standard install locations are searched), saves `tox/td_python_debug.tox`, writes `tox/td_python_debug.manifest.json` (sha256 per embedded DAT) and re-opens the tox to check it runs from the embedded code alone. `pytest` fails when the manifest no longer matches the sources. `--attach` builds in a temporary COMP of the TouchDesigner in the connection file instead.
+
+The plugin listens on `127.0.0.1` only and requires the token in `~/.td-mcp/connection.json` (override the location with `TD_MCP_CONNECTION`). `execute_python` runs arbitrary Python inside TouchDesigner.
 
 If a tool times out, TouchDesigner is probably stopped on a dialog or the network is not cooking.
 

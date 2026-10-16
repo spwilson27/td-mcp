@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from td_plugin.context import TD_PYTHON, TouchDesignerContext
+from td_plugin.context import TouchDesignerContext, find_td_python
 from td_plugin.handlers import dispatch
 
 
@@ -204,4 +204,20 @@ def test_debugpy_missing_message_uses_touchdesigner_python():
     result = TouchDesignerContext(None).start_debugpy(5678)
     assert result["ok"] is False
     assert "debugpy is not installed" in result["error"]
-    assert result["install"] == f'"{TD_PYTHON}" -m pip install debugpy'
+    assert result["install"] == f'"{find_td_python()}" -m pip install debugpy'
+
+
+def test_find_td_python_env_override_and_fallbacks(monkeypatch, tmp_path):
+    monkeypatch.setenv("TD_MCP_PYTHON", "/x/py")
+    assert find_td_python() == "/x/py"
+    monkeypatch.delenv("TD_MCP_PYTHON")
+    assert find_td_python(SimpleNamespace(pythonExecutable="/y/py")) == "/y/py"
+    monkeypatch.setattr("td_plugin.context.sys.executable", "/opt/TD/TouchDesigner")
+    ver = f"{__import__('sys').version_info[0]}.{__import__('sys').version_info[1]}"
+    binary = tmp_path / "Frameworks" / "Python.framework" / "Versions" / ver / "bin" / f"python{ver}"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("")
+    monkeypatch.setattr("td_plugin.context.sys.prefix", str(tmp_path / "nowhere"))
+    found = find_td_python(SimpleNamespace(installFolder=str(tmp_path), binFolder=None))
+    assert found == str(binary.resolve())
+    assert find_td_python(SimpleNamespace()) == "python3"

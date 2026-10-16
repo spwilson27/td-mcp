@@ -2,15 +2,19 @@
 
 Run from the Textport:
 
-    exec(open("/Users/mrwilson/software/td-mcp/td_plugin/web_paint_install.py").read(), globals())
+    p = "<path-to-td-mcp>/td_plugin/web_paint_install.py"; exec(compile(open(p).read(), p, "exec"), {**globals(), "__file__": p})
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-DEFAULT_REPO = "/Users/mrwilson/software/td-mcp"
+TEXTPORT_HINT = (
+    'p = "<path-to-td-mcp>/td_plugin/web_paint_install.py"; '
+    'exec(compile(open(p).read(), p, "exec"), {**globals(), "__file__": p})'
+)
 DEFAULT_PORT = 9876
 
 PRELUDE = '''\
@@ -126,7 +130,10 @@ def repo_root() -> str:
     file = globals().get("__file__")
     if file:
         return str(Path(file).resolve().parent.parent)
-    return DEFAULT_REPO
+    home = os.environ.get("TD_MCP_HOME")
+    if home:
+        return str(Path(home).expanduser().resolve())
+    raise RuntimeError("Cannot locate the td-mcp checkout. Set TD_MCP_HOME or run:\n" + TEXTPORT_HINT)
 
 
 def install() -> None:
@@ -357,7 +364,7 @@ def _launch() -> None:
     except Exception:
         print(
             "Run this from the TouchDesigner Textport:\n"
-            "exec(open('/Users/mrwilson/software/td-mcp/td_plugin/web_paint_install.py').read(), globals())"
+            + TEXTPORT_HINT
         )
         return
     print("web_paint installer starting")

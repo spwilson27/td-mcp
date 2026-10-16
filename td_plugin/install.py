@@ -1,17 +1,94 @@
 """Build the debug component inside an open TouchDesigner project.
 
-Run from the Textport:
+Preferred: drag tox/td_python_debug.tox into the project (self-contained, no checkout needed).
 
-    exec(open("/Users/mrwilson/software/td-mcp/td_plugin/install.py").read(), globals())
+Dev install (live code from a checkout), from the Textport:
+
+    p = "<path-to-td-mcp>/td_plugin/install.py"; exec(compile(open(p).read(), p, "exec"), {**globals(), "__file__": p})
 """
 
 from __future__ import annotations
 
-import secrets
+import hashlib
+import os
 import sys
 from pathlib import Path
 
-DEFAULT_REPO = "/Users/mrwilson/software/td-mcp"
+DEFAULT_PORT = 8765
+
+TEXTPORT_HINT = (
+    'p = "<path-to-td-mcp>/td_plugin/install.py"; '
+    'exec(compile(open(p).read(), p, "exec"), {**globals(), "__file__": p})'
+)
+
+MODULES = ("td_plugin", "td_plugin.connection", "td_plugin.context", "td_plugin.handlers", "td_plugin.runtime")
+
+# Text DAT `bootstrap` inside the component. Resolves where `td_plugin` comes from, in this order:
+#   1. the `Modulepath` parameter, when not empty (dev override: live code from a checkout);
+#   2. the TD_MCP_MODULEPATH environment variable;
+#   3. the `mod_*` DATs embedded in the component (no checkout needed).
+BOOTSTRAP = '''\
+import importlib.abc
+import importlib.util
+import os
+import sys
+
+_MARK = "_td_mcp_embedded_finder"
+
+
+def dat_name(modname):
+    tail = modname.split(".", 1)[1] if "." in modname else "init"
+    return "mod_" + tail
+
+
+class _EmbeddedFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    _td_mcp_embedded_finder = True
+
+    def __init__(self, comp_path):
+        self.comp_path = comp_path
+
+    def _dat(self, name):
+        comp = op(self.comp_path)
+        return comp.op(dat_name(name)) if comp is not None else None
+
+    def find_spec(self, name, path=None, target=None):
+        if name != "td_plugin" and not name.startswith("td_plugin."):
+            return None
+        if self._dat(name) is None:
+            return None
+        return importlib.util.spec_from_loader(name, self, is_package=(name == "td_plugin"))
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        dat = self._dat(module.__name__)
+        exec(compile(dat.text, "<td_mcp embedded %s>" % dat.name, "exec"), module.__dict__)
+
+
+def _remove_finders():
+    sys.meta_path[:] = [f for f in sys.meta_path if not getattr(f, _MARK, False)]
+
+
+def module_path(comp):
+    return str(comp.par.Modulepath.eval() or "").strip() or os.environ.get("TD_MCP_MODULEPATH", "").strip()
+
+
+def prepare(comp):
+    """Make `import td_plugin.*` resolve per the order above. Cheap; safe to call every frame."""
+    path = module_path(comp)
+    if path:
+        _remove_finders()
+        if path not in sys.path:
+            sys.path.insert(0, path)
+        return "path"
+    current = [f for f in sys.meta_path if getattr(f, _MARK, False)]
+    if current and current[0].comp_path == comp.path and sys.meta_path[0] is current[0]:
+        return "embedded"
+    _remove_finders()
+    sys.meta_path.insert(0, _EmbeddedFinder(comp.path))
+    return "embedded"
+'''
 
 EXECUTE_CALLBACKS = '''\
 def _report_once(exc):
@@ -23,10 +100,7 @@ def _report_once(exc):
 
 def _prepare():
     comp = parent()
-    module_path = comp.par.Modulepath.eval()
-    import sys
-    if module_path and module_path not in sys.path:
-        sys.path.insert(0, module_path)
+    comp.op("bootstrap").module.prepare(comp)
     return comp
 
 
@@ -89,10 +163,7 @@ def _report_once(exc):
 def onPulse(par):
     try:
         comp = parent()
-        module_path = comp.par.Modulepath.eval()
-        import sys
-        if module_path and module_path not in sys.path:
-            sys.path.insert(0, module_path)
+        comp.op("bootstrap").module.prepare(comp)
         import td_plugin.runtime as runtime
     except Exception as exc:
         _report_once(exc)
@@ -106,25 +177,56 @@ def onPulse(par):
 
 
 def repo_root() -> str:
+    """The td-mcp checkout this file was loaded from (or $TD_MCP_HOME)."""
     file = globals().get("__file__")
     if file:
         return str(Path(file).resolve().parent.parent)
-    return DEFAULT_REPO
+    home = os.environ.get("TD_MCP_HOME")
+    if home:
+        return str(Path(home).expanduser().resolve())
+    raise RuntimeError(
+        "Cannot locate the td-mcp checkout. Run the installer with its path, or set TD_MCP_HOME:\n" + TEXTPORT_HINT
+    )
 
 
-def install() -> None:
-    root = repo_root()
-    if root not in sys.path:
-        sys.path.insert(0, root)
+def module_dat_name(modname: str) -> str:
+    tail = modname.split(".", 1)[1] if "." in modname else "init"
+    return "mod_" + tail
 
-    parent_comp = op("/project1")
-    if parent_comp is None:
-        parent_comp = op("/")
-    existing = parent_comp.op("td_python_debug")
+
+def module_file(root: str, modname: str) -> Path:
+    base = Path(root) / modname.replace(".", "/")
+    return base / "__init__.py" if modname == "td_plugin" else base.with_suffix(".py")
+
+
+def component_sources(root: str) -> dict:
+    """DAT name -> text for every DAT embedded in the component, in a stable order."""
+    sources = {"bootstrap": BOOTSTRAP, "callbacks": EXECUTE_CALLBACKS, "par_callbacks": PARAMETER_CALLBACKS}
+    for modname in MODULES:
+        text = module_file(root, modname).read_text(encoding="utf-8")
+        sources[module_dat_name(modname)] = text.replace("\r\n", "\n")
+    return sources
+
+
+def source_hashes(root: str) -> dict:
+    return {
+        name: hashlib.sha256(text.encode("utf-8")).hexdigest() for name, text in component_sources(root).items()
+    }
+
+
+def build_component(parent_comp, root: str, module_path: str = "", name: str = "td_python_debug", start: bool = True):
+    """Create the debug component under `parent_comp` (a TD COMP).
+
+    `module_path` goes in the Modulepath parameter ("" = use the embedded modules). With `start=False` nothing is started and the
+    component keeps Token blank: used to build the shipped tox (scripts/build_tox.py).
+    """
+    import td
+
+    existing = parent_comp.op(name)
     if existing is not None:
         existing.destroy()
 
-    base = parent_comp.create(baseCOMP, "td_python_debug")
+    base = parent_comp.create(td.baseCOMP, name)
     base.nodeX = 0
     base.nodeY = -400
     try:
@@ -134,34 +236,44 @@ def install() -> None:
 
     page = base.appendCustomPage("Debug")
     port = _first_par(page.appendInt("Port", label="Port"))
-    _assign(port, 8765)
+    _assign(port, DEFAULT_PORT)
 
     autostart = _first_par(page.appendToggle("Autostart", label="Auto Start"))
     _assign(autostart, True)
+    if not start:
+        autostart.val = False   # restored at the end: nothing may boot while the component is being built
 
-    module_path = _first_par(page.appendStr("Modulepath", label="Module Path"))
-    _assign(module_path, root)
+    mp = _first_par(page.appendStr("Modulepath", label="Module Path"))
+    _assign(mp, module_path)
 
-    token = secrets.token_urlsafe(32)
+    # Blank: the runtime generates a random token at first start and stores it here.
     token_par = _first_par(page.appendStr("Token", label="Token"))
-    _assign(token_par, token)
+    _assign(token_par, "")
 
     _first_par(page.appendPulse("Start", label="Start"))
     _first_par(page.appendPulse("Stop", label="Stop"))
 
-    callbacks = base.create(executeDAT, "callbacks")
-    callbacks.text = EXECUTE_CALLBACKS
+    sources = component_sources(root)
+    for i, (dat_name, text) in enumerate(sources.items()):
+        if dat_name in ("callbacks", "par_callbacks"):
+            continue
+        dat = base.create(td.textDAT, dat_name)
+        dat.text = text
+        dat.nodeX = 400 + (i % 4) * 200
+        dat.nodeY = -(i // 4) * 150
+
+    callbacks = base.create(td.executeDAT, "callbacks")
+    callbacks.text = sources["callbacks"]
     callbacks.nodeX = 0
     callbacks.nodeY = 0
-    _enable(callbacks, "active", True)
     _enable(callbacks, "start", True)
     _enable(callbacks, "create", True)
     _enable(callbacks, "framestart", True)
     _enable(callbacks, "exit", True)
     _set_language(callbacks)
 
-    pulses = base.create(parameterexecuteDAT, "par_callbacks")
-    pulses.text = PARAMETER_CALLBACKS
+    pulses = base.create(td.parameterexecuteDAT, "par_callbacks")
+    pulses.text = sources["par_callbacks"]
     pulses.nodeX = 200
     pulses.nodeY = 0
     _enable(pulses, "active", True)
@@ -174,6 +286,26 @@ def install() -> None:
     if hasattr(pulses.par, "op"):
         pulses.par.op.expr = "parent()"
     _set_language(pulses)
+
+    # Last: with active on, the callbacks boot the server (Auto Start) and pump it every frame.
+    _enable(callbacks, "active", True)
+    if not start:
+        autostart.val = True
+    return base
+
+
+def install() -> None:
+    """Dev install into the open project: Modulepath points at this checkout (live code); the modules are embedded as a fallback."""
+    import td
+
+    root = repo_root()
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+    parent_comp = td.op("/project1")
+    if parent_comp is None:
+        parent_comp = td.op("/")
+    base = build_component(parent_comp, root, module_path=root, start=True)
 
     from td_plugin.runtime import ensure_started
 
@@ -225,8 +357,7 @@ def _launch() -> None:
     if not _running_inside_touchdesigner():
         if __name__ == "__main__":
             print(
-                "Run this from the TouchDesigner Textport:\n"
-                "exec(open('/Users/mrwilson/software/td-mcp/td_plugin/install.py').read(), globals())"
+                "Run this from the TouchDesigner Textport:\n" + TEXTPORT_HINT
             )
         return
     print("td-python-debug installer starting")

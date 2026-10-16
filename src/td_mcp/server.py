@@ -13,8 +13,8 @@ mcp = MCPServer(
         "execute_python runs on the main thread and returns stdout plus any traceback. "
         "read_dat, write_dat, list_python_dats, operator_errors, and describe_operator "
         "inspect the network. start_debugpy listens on 127.0.0.1 without pausing "
-        "TouchDesigner. If a tool says TouchDesigner is not reachable, Default.toe is "
-        "not open or the debug plugin did not start."
+        "TouchDesigner. If a tool says TouchDesigner is not reachable, a project with the "
+        "debug component is not open, or it did not start."
     ),
 )
 

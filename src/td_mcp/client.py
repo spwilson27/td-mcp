@@ -90,7 +90,7 @@ def call(
             "ok": False,
             "error": (
                 f"TouchDesigner is not reachable at {conn.host}:{conn.port}. "
-                "Open Default.toe and confirm the Textport shows the debug server listening. "
+                "Open your TouchDesigner project and confirm the Textport shows the debug server listening. "
                 f"({exc.reason})"
             ),
         }

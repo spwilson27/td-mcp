@@ -110,7 +110,7 @@ def ensure_started(comp: Any, force: bool = False) -> None:
     hub = get_hub()
     if hub.running and not force:
         return
-    module_path = str(comp.par.Modulepath.eval())
+    module_path = str(comp.par.Modulepath.eval() or "") or os.environ.get("TD_MCP_MODULEPATH", "")
     _insert_module_path(module_path)
     port = _port_for(comp)
     token = str(comp.par.Token.eval() or "")
